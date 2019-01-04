@@ -18,7 +18,8 @@ object JdbcUtil {
     properties.setProperty("url", config.getString("jdbc.url"))
     properties.setProperty("username", config.getString("jdbc.user"))
     properties.setProperty("password", config.getString("jdbc.password"))
-    properties.setProperty("maxActive", config.getString("jdbc.maxActive"))
+   // println(config.getString("jdbc.maxActive"))
+   properties.setProperty("maxActive", config.getString("jdbc.maxActive"))
 
     DruidDataSourceFactory.createDataSource(properties)
 

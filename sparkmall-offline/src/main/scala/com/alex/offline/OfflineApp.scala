@@ -4,8 +4,8 @@ import java.text.SimpleDateFormat
 import java.util
 import java.util.{Date, UUID}
 
-import com.alex.offline.bean.SessionInfo
-import com.alex.offline.utils.SessionAccumulator
+import com.alex.offline.bean.{Categoryinfo, SessionInfo}
+import com.alex.offline.utils.{CategoryAccumulator, SessionAccumulator}
 import com.alex.sparkmall.common.bean.UserVisitAction
 import com.alex.sparkmall.common.utils.{ConfigurationUtil, JdbcUtil}
 import com.alibaba.fastjson.{JSON, JSONObject}
@@ -14,7 +14,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, sql}
 import org.apache.spark.sql.{SaveMode, SparkSession}
 
-import scala.collection.mutable
+import scala.collection.{immutable, mutable}
 import scala.collection.mutable.ListBuffer
 import scala.util.Random
 
@@ -59,6 +59,14 @@ object OfflineApp {
     val sessionIdGroupByKey: RDD[(String, Iterable[UserVisitAction])] = sessionidAndUserVisitAction.groupByKey()
 
 
+    //需求一
+    //统计出符合筛选条件的session中，访问时长在小于10s含、10s以上各个范围内的session数量占比。访问步长在小于等于5，和大于5次的占比
+    //1 根据过滤条件 取出符合的日志RDD集合 成为RDD[UserVisitAction],使用hql完成(小难点)
+    // 2 以sessionId为key 进行聚合 =》 RDD[sessionId,Iterable[UserVisitAction]]
+    // 3 把每个iterable 遍历 取最大时间和最小时间 ，取差 ，得session时长
+    // 4 根据条件进行计数 利用累加器进行计数, 自定义累加器(小难点)
+    // 5 求占比 =》 符合条件的计数 除以 总数
+    // 6 结果保存到mysql
 
     //注册累加器
     val accumulator = new SessionAccumulator
@@ -123,8 +131,10 @@ object OfflineApp {
     val visitStep_5_gt_ratio:Double = Math.round( (visitStep_5_gt.toDouble/session_count*1000))/10D
 
 
-    print(visitLength_10_le_ratio)
-    print(visitStep_5_gt_ratio)
+    println(visitLength_10_le_ratio)
+    println(visitLength_10_gt_ratio)
+    println(visitStep_5_gt_ratio)
+    println(visitStep_5_le_ratio)
 
 
 
@@ -133,8 +143,10 @@ object OfflineApp {
     val result: Array[Any] = Array(taskID,jsonstr,session_count,visitLength_10_le_ratio,visitLength_10_gt_ratio,visitStep_5_le_ratio,visitStep_5_gt_ratio)
    //JdbcUtil.executeUpdate("insert into session_stat_info values(?,?,?,?,?,?,?)" ,result)
 
+    println("需求一完成")
 
     //需求二
+
     //按每小时session数量比例随机抽取1000个session
     // 1 把 session 的动作集合 整理成指定要求的sessionInfo
     // 2 用天+小时作为key 进行聚合 RDD[dayhourkey,sessionInfo] =>groupbykey=> RDD[dayhourkey,iterable[sessionInfo]]
@@ -175,7 +187,7 @@ object OfflineApp {
           max = time
         }
         if (x.search_keyword !=null) searchKeywordList += x.search_keyword
-        if (x.search_keyword != -1L) clickProductIdsList += x.click_product_id.toString
+        if (x.click_product_id != -1L) clickProductIdsList += x.click_product_id.toString
         if (x.order_product_ids!=null) orderProductIdsList += x.order_product_ids
         if (x.pay_product_ids!=null) payProductIdsList += x.pay_product_ids
       })
@@ -198,11 +210,11 @@ object OfflineApp {
 
     //按照time分割 (time,Iterable[SessionInfo]))
     val sessioninfoGroupByKey: RDD[(String, Iterable[SessionInfo])] = forgroupBytime.groupByKey()
-    
+
     val Allsize=1000
 
     val sessioncount: Long = sessionIdGroupByKey.count()
-    
+
 
       val infoResList = new ListBuffer[SessionInfo]()
 
@@ -212,37 +224,139 @@ object OfflineApp {
     val infores2sql: RDD[SessionInfo] = sessioninfoGroupByKey.flatMap { case (time, info) =>
 
       val currCount: Int = info.size
-      val currRat: Long = math.round(currCount.toDouble * Allsize / sessioncount)
+      val currRat: Long = math.round(currCount.toDouble * Allsize/ sessioncount )
 
       var curset = new mutable.HashSet[SessionInfo]()
+      val rawlist = info.toList
 
 
-      while (curset.size > currRat) {
+      //随机抽数
+      while (curset.size < currRat) {
 
-        val index: Int = new Random().nextInt(curset.size)
-        curset += info.toList(index)
+        val index: Int = new Random().nextInt(rawlist.size)
+        curset += rawlist(index)
 
       }
 
       infoResList ++= curset.toList
 
 
-     // val sessionList: List[SessionInfo] = extractNum(info.toArray,currRat.toInt)
-      //sessionList
+//      val sessionList: List[SessionInfo] = extractNum(info.toArray,currRat.toInt)
+//      sessionList
       infoResList
+     // curset.toList
     }
-    println(infores2sql.take(5).mkString(","))
+//    println(infores2sql.collect().size)
+//    println(infores2sql.take(5).mkString(","))
 
 
     //5 保存到mysql中
     import sparkSession.implicits._
 
-//    val config2: FileBasedConfiguration = ConfigurationUtil("config.properties").config
-//    infores2sql.toDF.write.format("jdbc")
-//      .option("url", config2.getString("jdbc.url"))
-//      .option("user", config2.getString("jdbc.user"))
-//      .option("password", config2.getString("jdbc.password"))
-//      .option("dbtable", "random_session_info").mode(SaveMode.Append).save()
+    val config2: FileBasedConfiguration = ConfigurationUtil("config.properties").config
+    infores2sql.toDF.write.format("jdbc")
+      .option("url", config2.getString("jdbc.url"))
+      .option("user", config2.getString("jdbc.user"))
+      .option("password", config2.getString("jdbc.password"))
+      .option("dbtable", "random_session_info").mode(SaveMode.Append).save()
+
+    println("需求二完成")
+
+    //需求三
+
+    //注册累加器
+
+    val categroyaccumulator = new CategoryAccumulator
+
+    sparkSession.sparkContext.register(categroyaccumulator)
+
+
+
+    //把商品按照点击\订单\支付进行累加
+    filterRDD.foreach { useraction =>
+
+      if (useraction.click_category_id != -1) {
+        categroyaccumulator.add(useraction.click_category_id + "_click")
+
+      } else if(useraction.order_category_ids!=null) {
+        //订单类别是 3,5,7这样的,需要拆分为单个的cid
+        useraction.order_category_ids.split(",").foreach(x=>
+        categroyaccumulator.add(x + "_order")
+        )
+
+      } else if(useraction.pay_category_ids!=null) {
+
+        useraction.pay_category_ids.split(",").foreach(x=>
+          categroyaccumulator.add(x + "_pay")
+        )
+
+
+      }
+
+
+    }
+
+    //取出累加的结果
+    val categoryCountMap: mutable.HashMap[String, Long] = categroyaccumulator.value
+
+   // categoryCountMap.foreach(println)
+    //按照cid进行分组 之前的格式((15_order,301),(15_pay,301),(15_click,1740))  分组后 (15,(((15_order,301),(15_pay,301),(15_click,1740))))
+    val categorygroupby: Map[String, mutable.HashMap[String, Long]] = categoryCountMap.groupBy{case (cidAction,count)=> cidAction.split("_")(0)}
+
+    val categoryinfos: immutable.Iterable[Categoryinfo] = categorygroupby.map { case (cid, categorycountmap) =>
+      val click: Long = categorycountmap.getOrElse(cid + "_click", 0L)
+      val order: Long = categorycountmap.getOrElse(cid + "_order", 0L)
+      val pay: Long = categorycountmap.getOrElse(cid + "_pay", 0L)
+
+      Categoryinfo(taskID, cid, click, order, pay)
+    }
+    val sortedCategoryinfo: List[Categoryinfo] = categoryinfos.toList.sortWith { case (a, b) =>
+
+      if (a.clickCount < b.clickCount) {
+
+        false
+      } else if (a.clickCount == b.clickCount) {
+        if (a.orderCount < b.orderCount) {
+
+          false
+        } else if (a.orderCount == b.orderCount) {
+          if (a.payCount < b.payCount) {
+            false
+          } else {
+            true
+          }
+        } else {
+          true
+        }
+
+      } else {
+        true
+      }
+
+
+    }.take(10)
+   val toSqllist: List[Array[Any]] = sortedCategoryinfo.map(item=>
+     Array(item.taskId,item.categoryId,item.clickCount,item.orderCount,item.payCount))
+    //写入数据库
+    //toSqllist.foreach(x=>println(x.mkString("\t")))
+    JdbcUtil.executeBatchUpdate("insert into category_top10 values(?,?,?,?,?)",toSqllist)
+
+    println("需求三完成")
+
+
+    //需求四
+//对于排名前 10 的品类，分别获取其点击次数排名前 10 的 sessionId。
+
+
+
+
+
+
+
+
+
+
+
 
   }
 

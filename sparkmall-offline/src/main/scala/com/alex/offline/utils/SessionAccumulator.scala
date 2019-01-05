@@ -13,6 +13,7 @@ class SessionAccumulator  extends  AccumulatorV2[String,HashMap[String,Long]]{
 
   override def copy(): AccumulatorV2[String, mutable.HashMap[String, Long]] = {
     val accumulator = new SessionAccumulator()
+    //源码里自带的累加器都是这么写的,传值过去
     accumulator.seesionCount ++=this.seesionCount
     accumulator
   }
@@ -28,10 +29,11 @@ class SessionAccumulator  extends  AccumulatorV2[String,HashMap[String,Long]]{
 
     val othervalue: mutable.HashMap[String, Long] = other.value
 
-    val res: mutable.HashMap[String, Long] = this.seesionCount.foldLeft(othervalue) { case (sessionOther: mutable.HashMap[String, Long], (key,count)) =>
+    val res: mutable.HashMap[String, Long] = this.seesionCount.foldLeft(othervalue) {
+      case (sessionOther, (key,count)) =>
 
-      othervalue(key) = othervalue.getOrElse(key,0L) + count
-      othervalue
+        sessionOther(key) = othervalue.getOrElse(key,0L) + count
+        sessionOther
     }
 
     this.seesionCount=res

@@ -90,6 +90,69 @@ object OfflineApp {
     println("需求四完成时间:"+(time4-time3))
 
 
+    //获取要统计的页面
+    val targetPagestr: Array[String] = conditionJSOBJ.getString("targetPageFlow").split(",")
+    //最后一个元素不要
+    val targetpage: Array[String] = targetPagestr.slice(0, targetPagestr.length - 1)
+
+    //通过zip函数把 1,2,3,4  (1,2),(2,3),(3,4)转换为1-2,2-3,3-4的格式
+    val targetPageArry: Array[String] = targetpage.zip(targetpage.slice(1, targetpage.length - 1)).map {
+      case (page1, page2) => page1 + "_" + page2
+    }
+
+    //注册广播变量
+    val targetpagebc: Broadcast[Array[String]] = sparkSession.sparkContext.broadcast(targetpage)
+    val targetPageArrybc: Broadcast[Array[String]] = sparkSession.sparkContext.broadcast(targetPageArry)
+
+    //把满足条件的数据过滤出来, 并按照pageid 进行统计,得到每一步的用户   countByKey是一个action算子
+    val pageCount: collection.Map[Long, Long] = filterRDD.filter(useraction=> targetpagebc.value.contains( useraction.page_id.toString) )
+                                                          .map(useraction=> (useraction.page_id,1L)).countByKey()
+
+
+
+    //统计相邻步的用户
+    //首先按照(sessionid,useraction) 格式转换,然后再bykey  得到(sessionid,useractionIterable)
+    val sessionAnduseranction: RDD[(String, Iterable[UserVisitAction])] = filterRDD.map( useraction=> (useraction.session_id,useraction)).groupByKey()
+
+
+
+    // 把同一个sessionid的action按照时间进行排序, 是对value进行sort
+    val steppage: RDD[String] = sessionAnduseranction.flatMap { case (sessionid, action) =>
+      //把排好序的页面号取出来, 方便以后的zip
+      val pageid: List[Long] = action.toList.sortWith((a, b) => a.action_time < b.action_time).map(_.page_id)
+
+      //把取出来的  1,2,3,4  (1,2),(2,3),(3,4)转换为1-2,2-3,3-4的格式
+      val pageidmerge: List[String] = pageid.zip(pageid.slice(1, pageid.length)).map { case (page1, page2) => page1 + "_" + page2 }
+
+      //过滤在统计要求里的数据
+
+      val respage: List[String] = pageidmerge.filter(page => targetPageArrybc.value.contains(page))
+
+
+      respage
+    }
+    //相邻步的用户统计
+    val setppageCount: RDD[(String, Long)] = steppage.map((_,1L)).reduceByKey(_+_)
+
+
+    //计算比率
+    val restosql: RDD[Array[Any]] = setppageCount.map { case (pagestep, count) =>
+
+      val rate: Double = count.toDouble / pageCount.getOrElse(pagestep.split("_")(0).toLong, 0L)
+
+
+      Array(taskID, pagestep, rate)
+    }
+    restosql
+
+
+
+    println(restosql.take(1).mkString("\n"))
+    restosql.take(1).foreach(println)
+
+
+
+
   }
 
 

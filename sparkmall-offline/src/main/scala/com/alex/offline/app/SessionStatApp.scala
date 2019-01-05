@@ -85,10 +85,10 @@ object SessionStatApp {
     val visitStep_5_gt_ratio: Double = Math.round((visitStep_5_gt.toDouble / session_count * 1000)) / 10D
 
 
-    println(visitLength_10_le_ratio)
-    println(visitLength_10_gt_ratio)
-    println(visitStep_5_gt_ratio)
-    println(visitStep_5_le_ratio)
+//    println(visitLength_10_le_ratio)
+//    println(visitLength_10_gt_ratio)
+//    println(visitStep_5_gt_ratio)
+//    println(visitStep_5_le_ratio)
 
 
     //插入到sql中

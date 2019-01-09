@@ -128,7 +128,7 @@ object SessionExtractorApp {
       .option("user", config2.getString("jdbc.user"))
       .option("password", config2.getString("jdbc.password"))
       .option("dbtable", "random_session_info").mode(SaveMode.Append).save()
-    config2
+    //config2
   }
 
 

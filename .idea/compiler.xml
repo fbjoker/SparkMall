@@ -9,6 +9,7 @@
         <module name="sparkmall-common" />
         <module name="sparkmall-mock" />
         <module name="sparkmall-offline" />
+        <module name="sparkmall-realtime" />
       </profile>
     </annotationProcessing>
   </component>

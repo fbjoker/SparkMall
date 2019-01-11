@@ -12,7 +12,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.apache.spark.streaming.{Minutes, Seconds, StreamingContext}
 import redis.clients.jedis.Jedis
 import org.json4s.native.JsonMethods
 import org.json4s.JsonDSL._
@@ -43,8 +43,9 @@ object RealTimeAnl {
 
       AdsInfo(adsinfo(0).toLong, adsinfo(1), adsinfo(2), adsinfo(3), adsinfo(4))
     }
+    //checkpoint
 
-
+    val datacheckpoint: DStream[AdsInfo] = inputDs2AdsInfo.checkpoint(Seconds(20))
 
     println("x1")
  //   BlackListApp.checkUserToBlackList(inputDs2AdsInfo)
@@ -216,18 +217,118 @@ object RealTimeAnl {
 
       val jedisClient: Jedis = RedisUtil.getJedisClient
      val restop3: Array[(String, Map[String, String])] = rdd.collect()
-      for (elem <- restop3) {
+
+      for ((str,map) <- restop3) {
+      //保存数据的格式为时间(天)为key,field为地区,v为对应的广告点击量json串
+        //也可以使用hmset直接保存map,需要隐士转换
+//       import  collection.JavaConversions._
+//        jedisClient.hmset("top3_ads_per_day:"+str,map)
+        for ((area,adiscount1) <- map) {
+        jedisClient.hset("top3_ads_per_day:"+str,area,adiscount1)
+        }
+      }
+
+      //关闭连接
+      jedisClient.close()
+
+    }
 
 
 
+
+    //需求十
+//    最近一小时广告点击量实时统计
+//   key last_hour_ads_click   field:    广告id     value:  { 小时分钟:点击次数, 分钟数2：点击次数…..}
+
+//     先转成 Ds[adsid+minute,1L] 然后再Ds[adsid+minute,count]   不能这么做因为map收集的是当前的数据.数据不全
+    val adsidAndminuteCount: DStream[(String, Long)] = datacheckpoint.map { adsinfo =>
+
+      //把时间解析成为小时分钟格式
+      val clicktimeminute: String = new SimpleDateFormat("mm:ss").format(new Date(adsinfo.ts))
+
+      (adsinfo.adsId +":"+ clicktimeminute, 1L)
+      //这里不能自动推断数据类型,必须指定
+    }.reduceByKeyAndWindow((a: Long, b: Long) => a + b, Minutes(60), Seconds(20))
+    //把Ds[adsid+minute,count] 转换成为 Ds[adsid,iter(minute,count)]
+    val adsidandminute1hour: DStream[(String, Iterable[(String, Long)])] = adsidAndminuteCount.map { case (adsidandminute, count) =>
+
+      val adsid: String = adsidandminute.split(":")(0)
+      val clicktimeminute: String = adsidandminute.split(":")(1)
+      (adsid, (clicktimeminute, count))
+
+    }.groupByKey()
+
+    //整理成为json字符串 Ds[adsid,jsonstr(minute,count)]
+    val res2LastHour: DStream[(String, String)] = adsidandminute1hour.map { case (adsid, iter) =>
+      val minutejson: String = JsonMethods.compact(JsonMethods.render(iter))
+
+
+      (adsid, minutejson)
+
+    }
+
+
+
+    res2LastHour.foreachRDD { rdd =>
+
+      val jedisClient: Jedis = RedisUtil.getJedisClient
+      val res2redis: Array[(String, String)] = rdd.collect()
+      for ((adsid, iter) <- res2redis) {
+
+        jedisClient.hset("last_hour_ads_click", adsid, iter)
 
 
       }
-
-
+      jedisClient.close()
 
 
     }
+
+
+
+
+/*
+    // 1 利用滑动窗口取近一小时数据   rdd[adsInfo]=>window
+    val lastHourAdsInfoDstream: DStream[AdsInfo] = inputDs2AdsInfo.window(Minutes(60),Seconds(20))
+
+
+
+
+
+
+    // 2 ,按广告进行汇总计数   rdd[ads_hourMinus ,1L]=> reducebykey=>
+    val hourMinuCountPerAdsDSream: DStream[(String, Long)] = lastHourAdsInfoDstream.map { adsInfo =>
+      val hourMinus: String = new SimpleDateFormat("HH:mm").format(new Date(adsInfo.ts))
+      (adsInfo.adsId + "_" + hourMinus, 1L)
+    }.reduceByKey(_ + _)
+    // 3 把相同广告的 统计汇总     RDD[ads_hourMInus,count]=>
+    //    RDD[(adsId, (hourMInus,count)].groubykey
+    //    => RDD[(adsId,Iterable[(hourMinu,count)]]
+    val hourMinusCountGroupbyAdsDStream: DStream[(String, Iterable[(String, Long)])] = hourMinuCountPerAdsDSream.map { case (adsHourMinusKey, count) =>
+      val ads: String = adsHourMinusKey.split("_")(0)
+      val hourMinus: String = adsHourMinusKey.split("_")(1)
+      (ads, (hourMinus, count))
+    }.groupByKey()
+
+    //4 把小时分钟的计数结果转换成json
+    //    =>RDD[adsId,Map[hourMinus,count]]
+    //    =>Map[adsId,Map[hourMinus,count]]
+    //    Map[adsId,hourminusCountJson ]
+    val hourMinusCountJsonGroupbyAdsDStream: DStream[(String, String)] = hourMinusCountGroupbyAdsDStream.map { case (ads, hourMinusItr) =>
+      val hourMinusCountJson: String = JsonMethods.compact(JsonMethods.render(hourMinusItr))
+      (ads, hourMinusCountJson)
+    }
+    hourMinusCountJsonGroupbyAdsDStream.foreachRDD(rdd=> {
+
+      val hourMinusCountJsonArray: Array[(String, String)] = rdd.collect()
+
+      val jedisClient: Jedis = RedisUtil.getJedisClient
+      import collection.JavaConversions._
+      jedisClient.hmset("last_hour_ads_click",hourMinusCountJsonArray.toMap)
+      jedisClient.close()
+    }
+
+    )*/
 
 
 

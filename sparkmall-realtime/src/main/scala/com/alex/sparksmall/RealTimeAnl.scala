@@ -244,7 +244,7 @@ object RealTimeAnl {
     val adsidAndminuteCount: DStream[(String, Long)] = datacheckpoint.map { adsinfo =>
 
       //把时间解析成为小时分钟格式
-      val clicktimeminute: String = new SimpleDateFormat("mm:ss").format(new Date(adsinfo.ts))
+      val clicktimeminute: String = new SimpleDateFormat("HH:mm").format(new Date(adsinfo.ts))
 
       (adsinfo.adsId +":"+ clicktimeminute, 1L)
       //这里不能自动推断数据类型,必须指定
